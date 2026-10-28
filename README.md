@@ -108,7 +108,6 @@ curl "http://localhost:8000/post/recommendations/?user_id=200&dt=2021-10-05T12:0
 ├── app.py             # FastAPI-приложение и логика рекомендаций
 ├── database.py        # Подключение к PostgreSQL
 ├── schema.py          # Pydantic-модели API
-├── model.pkl          # Обученная CatBoost-модель
 ├── Project_ML.ipynb   # EDA, подготовка признаков и обучение модели
 ├── requirements.txt   # Зависимости проекта
 └── .env.example       # Пример переменной подключения к БД
