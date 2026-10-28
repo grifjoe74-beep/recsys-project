@@ -11,21 +11,8 @@ from loguru import logger
 from schema import PostGet
 
 
-# === Вспомогательные функции ===
 def load_sql(query: str, dtypes: Dict[str, Any] = None) -> pd.DataFrame:
-    """
-    Выполняет SQL-запрос через соединение postgres_connection и возвращает DataFrame.
-
-    Аргументы:
-        query: SQL-запрос
-        dtypes: словарь типов колонок для pd.read_sql (по умолчанию None)
-
-    Возвращает:
-        pd.DataFrame с результатом запроса
-
-    Исключения:
-        RuntimeError, если произошла ошибка при выполнении запроса
-    """
+    """Выполняем запрос к БД"""
     conn = postgres_connection()
 
     try:
@@ -33,8 +20,7 @@ def load_sql(query: str, dtypes: Dict[str, Any] = None) -> pd.DataFrame:
     except Exception as e:
         raise RuntimeError(f"❌ Ошибка при выполнении SQL-запроса: {e}\nЗапрос: {query}") from e
     finally:
-        # postgres_connection() отдаёт SQLAlchemy Engine — у него нет .close() (только .dispose()),
-        # безусловный conn.close() падает с AttributeError на первом же запросе
+        # Engine закрывать не нужно: он управляет пулом соединений сам.
         if hasattr(conn, "close"):
             conn.close()
 
@@ -42,17 +28,7 @@ def load_sql(query: str, dtypes: Dict[str, Any] = None) -> pd.DataFrame:
 
 
 def load_model(model_path: str = "model.pkl"):
-    """
-    Загружает ML-модель из pickle-файла.
-
-    Если код запускается в LMS-окружении (IS_LMS=1),
-    путь берётся из переменной окружения MODEL_PATH.
-    Иначе используется локальный путь, переданный пользователем.
-
-    Исключения:
-        FileNotFoundError — если файл модели не найден.
-        RuntimeError — если произошла ошибка при загрузке модели.
-    """
+    """Загружает модель из файла"""
     if os.environ.get("IS_LMS", "0") == "1":
         model_path = os.environ["MODEL_PATH"]
 
@@ -72,7 +48,7 @@ def load_model(model_path: str = "model.pkl"):
 
 
 def load_features():
-    """Загружаем признаки пользователей и постов из БД"""
+    """Загружает из базы признаки пользователей, постов и историю лайков"""
     logger.info("Загрузка признаков пользователей...")
 
     user_dtypes = {
@@ -118,7 +94,7 @@ def load_features():
 
 
 def extract_dt_features(dt: datetime) -> pd.DataFrame:
-    """Формируем временные признаки из datetime"""
+    """Возвращает признаки даты и времени для модели."""
     dt_series = pd.Series([dt])
     features = pd.DataFrame(index=dt_series.index)
 
@@ -129,7 +105,6 @@ def extract_dt_features(dt: datetime) -> pd.DataFrame:
     features["is_weekend"] = dt_series.dt.dayofweek.isin([5, 6]).astype("category")
     features["hour"] = dt_series.dt.hour.astype("category")
 
-    # Категория времени суток
     part_of_day = pd.Series(
         pd.Categorical(
             [None] * len(dt_series),
@@ -146,20 +121,15 @@ def extract_dt_features(dt: datetime) -> pd.DataFrame:
     return features
 
 
-# === Загрузка основных ресурсов ===
 logger.info("Инициализация сервиса...")
 
-# Создаём объект FastAPI
 app = FastAPI()
 
-# Загружаем модель в память
 model = load_model()
 
-# Загружаем признаки пользователей и постов и лайки пользователей
 df_user_features, df_post_features, df_user_likes = load_features()
 
-# Фолбэк для пользователя, которого нет в df_user_features (например, совсем новый): типичные
-# значения по всей таблице — без этого cross-join с пустым срезом роняет сервис на predict_proba.
+# для холодного старта пользователя используем медианы/моды по признакам
 _cold_user_values: Dict[str, Any] = {}
 for _col in df_user_features.columns:
     if _col == "user_id":
@@ -174,41 +144,24 @@ for _col in df_user_features.columns:
 logger.success("Сервис успешно инициализирован")
 
 
-# Эндпойнт для получения рекомендаций
 @app.get("/post/recommendations/", response_model=List[PostGet])
 def recommended_posts(user_id: int, dt: datetime, limit: int = 10) -> List[PostGet]:
-    """
-    Возвращает список рекомендованных постов для пользователя на заданную дату и время.
-
-    Аргументы:
-        user_id: идентификатор пользователя
-        dt: дата и время запроса (для временных признаков)
-        limit: максимальное количество постов в ответе
-
-    Возвращает:
-        Список объектов PostGet с топ-N постами
-    """
-    # множество ID уже пролайканных постов (у нового/неизвестного пользователя строки в таблице нет)
+    """Подбирает пользователю до limit постов, которые он с наибольшей вероятностью лайкнет"""
     liked_rows = df_user_likes.loc[df_user_likes["user_id"] == user_id, "liked_posts"]
     liked_posts = set(liked_rows.iloc[0]) if len(liked_rows) else set()
 
-    # Фильтруем df_post_features
     mask_not_liked = ~df_post_features["post_id"].isin(liked_posts)
     df_post_candidates = df_post_features[mask_not_liked]
 
-    # Если после фильтрации меньше limit, оставляем все посты
     if len(df_post_candidates) < limit:
         df_post_candidates = df_post_features
 
-    # Формируем временные признаки
     dt_features = extract_dt_features(dt)
 
-    # Признаки пользователя: если его нет в таблице (новый/неизвестный user_id) — берём фолбэк
     user_rows = df_user_features[df_user_features["user_id"] == user_id]
     if user_rows.empty:
         user_rows = pd.DataFrame([{**_cold_user_values, "user_id": user_id}])
 
-    # Создаем итоговый датафрейм с признаками
     df_final = pd.merge(
         pd.merge(
             dt_features,
@@ -219,16 +172,12 @@ def recommended_posts(user_id: int, dt: datetime, limit: int = 10) -> List[PostG
         how="cross",
     ).drop(columns=["user_id", "post_id", "text"])
 
-    # Предсказание вероятности лайка
     like_probs = model.predict_proba(df_final)[:, 1]
 
-    # Находим top-N
     top_idx = np.argpartition(-like_probs, limit - 1)[:limit]
 
-    # Берём посты по индексу
     top_posts = df_post_candidates.iloc[top_idx]
 
-    # Формируем список моделей PostGet
     recs = [
         PostGet(id=int(pid), text=str(text), topic=str(topic))
         for pid, text, topic in zip(top_posts["post_id"], top_posts["text"], top_posts["topic"])

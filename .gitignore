@@ -1,8 +1,25 @@
 .env
 .env.*
 !.env.example
+
+# Virtual environments and Python caches
 .venv/
+.venv*/
 __pycache__/
 *.py[cod]
 *.log
+
+# Local model and training artifacts
 model.pkl
+catboost_info/
+
+# Jupyter and local tooling
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/

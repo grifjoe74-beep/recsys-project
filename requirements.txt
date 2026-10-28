@@ -1,0 +1,15 @@
+# Python 3.13
+catboost>=1.2.8,<2
+fastapi>=0.115,<1
+ipykernel>=6.29,<7
+loguru>=0.7,<1
+matplotlib>=3.9,<4
+numpy>=1.26,<3
+pandas>=2.2,<4
+psycopg2-binary>=2.9.9,<3
+pydantic>=2.9,<3
+python-dotenv>=1.0,<2
+requests>=2.32,<3
+scikit-learn>=1.5,<2
+SQLAlchemy>=2,<3
+uvicorn[standard]>=0.30,<1
