@@ -20,7 +20,6 @@ def load_sql(query: str, dtypes: Dict[str, Any] = None) -> pd.DataFrame:
     except Exception as e:
         raise RuntimeError(f"❌ Ошибка при выполнении SQL-запроса: {e}\nЗапрос: {query}") from e
     finally:
-        # Engine закрывать не нужно: он управляет пулом соединений сам.
         if hasattr(conn, "close"):
             conn.close()
 
